@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  fraud-detection-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claims_fraud_detection
+    volumes:
+      - .:/app
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=INFO
+    command: python src/data_discovery.py
