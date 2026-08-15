@@ -1,8 +1,9 @@
 """
-Healthcare Provider Risk Scoring - Feature Engineering Module
---------------------------------------------------------------
+Healthcare Provider Risk Scoring - Advanced Feature Engineering Module
+------------------------------------------------------------------------
 Aggregates claim-level integrated datasets to the Provider primary key level.
-Constructs provider-level risk scoring features across 6 distinct feature categories.
+Constructs exact requested provider-level risk scoring features, peer benchmarking metrics,
+repeat beneficiary concentration, and temporal claim frequencies.
 Applies target labeling strictly to TRAIN provider features and guarantees zero target leakage.
 """
 
@@ -33,6 +34,51 @@ class ProviderFeatureExtractor:
 
         os.makedirs(self.features_dir, exist_ok=True)
 
+    def compute_beneficiary_repeat_and_concentration(self, df_claims):
+        """Compute repeat beneficiary counts, ratios, top beneficiary share, and HHI concentration index."""
+        logging.info("Computing beneficiary repeat counts and HHI concentration per provider...")
+        prov_bene_counts = df_claims.groupby(['Provider', 'BeneID']).size().reset_index(name='bene_claim_cnt')
+        
+        # Total claims per provider from this table
+        prov_totals = prov_bene_counts.groupby('Provider')['bene_claim_cnt'].sum().reset_index(name='total_prov_claims')
+        
+        # Merge total claims back to compute share per beneficiary
+        prov_bene_counts = prov_bene_counts.merge(prov_totals, on='Provider')
+        prov_bene_counts['bene_share'] = prov_bene_counts['bene_claim_cnt'] / prov_bene_counts['total_prov_claims']
+        prov_bene_counts['bene_share_sq'] = prov_bene_counts['bene_share'] ** 2
+
+        # Aggregations per provider
+        repeat_df = prov_bene_counts.groupby('Provider').agg(
+            repeat_beneficiary_count=('bene_claim_cnt', lambda x: (x > 1).sum()),
+            unique_beneficiaries=('BeneID', 'nunique'),
+            top_bene_claim_share=('bene_share', 'max'),
+            beneficiary_hhi_concentration=('bene_share_sq', 'sum')
+        ).reset_index()
+
+        repeat_df['repeat_beneficiary_ratio'] = (
+            repeat_df['repeat_beneficiary_count'] / np.maximum(1, repeat_df['unique_beneficiaries'])
+        )
+        return repeat_df
+
+    def compute_temporal_frequencies(self, df_claims):
+        """Compute active claim span, claims per month, claims per week, and claim frequency."""
+        logging.info("Computing temporal claim frequencies and active date spans...")
+        dates_df = df_claims.groupby('Provider').agg(
+            min_claim_dt=('ClaimStartDt', 'min'),
+            max_claim_dt=('ClaimStartDt', 'max'),
+            total_claims=('ClaimID', 'count')
+        ).reset_index()
+
+        dates_df['active_days'] = (dates_df['max_claim_dt'] - dates_df['min_claim_dt']).dt.days + 1
+        dates_df['active_months'] = np.maximum(1.0, dates_df['active_days'] / 30.4375)
+        dates_df['active_weeks'] = np.maximum(1.0, dates_df['active_days'] / 7.0)
+
+        dates_df['claims_per_month'] = dates_df['total_claims'] / dates_df['active_months']
+        dates_df['claims_per_week'] = dates_df['total_claims'] / dates_df['active_weeks']
+        dates_df['claim_frequency'] = dates_df['total_claims'] / dates_df['active_days']
+
+        return dates_df[['Provider', 'active_days', 'claims_per_month', 'claims_per_week', 'claim_frequency']]
+
     def extract_provider_features(self, group="train"):
         """Extract provider-level feature vectors from integrated claims dataset."""
         parquet_path = os.path.join(self.processed_dir, f"{group}_claims_integrated.parquet")
@@ -48,17 +94,21 @@ class ProviderFeatureExtractor:
             (df_claims['AttendingPhysician'] == df_claims['OperatingPhysician'])
         ).astype(int)
 
-        # Basic GroupBy aggregations
+        # Primary state of provider (mode state)
+        prov_state = df_claims.groupby('Provider')['State'].agg(
+            lambda x: x.mode()[0] if not x.mode().empty else (x.iloc[0] if len(x) > 0 else 0)
+        ).reset_index(name='primary_state')
+
+        # Core GroupBy Aggregations
+        prov_grp = df_claims.groupby('Provider')
+        
         agg_dict = {
             'ClaimID': ['count'],
-            'IsInpatient': ['sum', 'mean'],
-            'BeneID': ['nunique'],
             'InscClaimAmtReimbursed': ['sum', 'mean', 'max', 'std'],
             'DeductibleAmtPaid': ['sum', 'mean', 'max'],
-            'IPAnnualReimbursementAmt': ['mean'],
-            'OPAnnualReimbursementAmt': ['mean'],
-            'ClaimDuration': ['mean', 'max', 'std'],
+            'IsInpatient': ['sum', lambda x: (x == 0).sum(), 'mean'],
             'InpatientStayDuration': ['mean', 'max'],
+            'ClaimDuration': ['mean', 'max', 'std'],
             'AttendingPhysician': ['nunique'],
             'OperatingPhysician': ['nunique'],
             'OtherPhysician': ['nunique'],
@@ -76,39 +126,33 @@ class ProviderFeatureExtractor:
             'County': ['nunique'],
         }
 
-        # Flatten column names
-        prov_grp = df_claims.groupby('Provider')
         feat_df = prov_grp.agg(agg_dict)
 
         feat_df.columns = [
-            'TotalClaims',
-            'InpatientClaimsCount', 'InpatientRatio',
-            'UniqueBeneficiaries',
-            'TotalInscClaimAmtReimbursed', 'MeanInscClaimAmtReimbursed', 'MaxInscClaimAmtReimbursed', 'StdInscClaimAmtReimbursed',
-            'TotalDeductibleAmtPaid', 'MeanDeductibleAmtPaid', 'MaxDeductibleAmtPaid',
-            'MeanIPAnnualReimbursementAmt',
-            'MeanOPAnnualReimbursementAmt',
-            'MeanClaimDuration', 'MaxClaimDuration', 'StdClaimDuration',
-            'MeanInpatientStayDuration', 'MaxInpatientStayDuration',
-            'UniqueAttendingPhysicians', 'UniqueOperatingPhysicians', 'UniqueOtherPhysicians',
-            'SameAttendingOperatingRatio',
-            'UniqueAdmitDiagnosisCodes', 'UniqueGroupDiagnosisCodes',
-            'MeanNumDiagnosisCodes', 'MeanNumProcedureCodes',
-            'MeanPatientAge', 'StdPatientAge',
-            'DeceasedPatientCount', 'DeceasedPatientRatio',
-            'MeanChronicCondCount',
-            'RenalDiseaseRatio',
-            'GenderMaleRatio', 'GenderFemaleRatio',
-            'UniqueStatesServed', 'UniqueCountiesServed'
+            'total_claims',
+            'total_claim_amount', 'average_claim_amount', 'maximum_claim_amount', 'std_claim_amount',
+            'total_deductible_paid', 'average_deductible_paid', 'maximum_deductible_paid',
+            'inpatient_claim_count', 'outpatient_claim_count', 'inpatient_ratio',
+            'average_length_of_stay', 'max_inpatient_stay_duration',
+            'mean_claim_duration', 'max_claim_duration', 'std_claim_duration',
+            'unique_attending_physicians', 'unique_operating_physicians', 'unique_other_physicians',
+            'same_attending_operating_ratio',
+            'unique_admit_diagnosis_codes', 'unique_group_diagnosis_codes',
+            'mean_num_diagnosis_codes', 'mean_num_procedure_codes',
+            'mean_patient_age', 'std_patient_age',
+            'deceased_patient_count', 'deceased_patient_ratio',
+            'chronic_cond_score_mean',
+            'renal_disease_ratio',
+            'gender_male_ratio', 'gender_female_ratio',
+            'unique_states_served', 'unique_counties_served'
         ]
 
-        # Derived Ratios
-        feat_df['OutpatientClaimsCount'] = feat_df['TotalClaims'] - feat_df['InpatientClaimsCount']
-        feat_df['ClaimsPerBeneficiary'] = feat_df['TotalClaims'] / np.maximum(1, feat_df['UniqueBeneficiaries'])
-        feat_df['ReimbursementToDeductibleRatio'] = feat_df['TotalInscClaimAmtReimbursed'] / (feat_df['TotalDeductibleAmtPaid'] + 1.0)
-        feat_df['PhysicianToClaimRatio'] = feat_df['UniqueAttendingPhysicians'] / feat_df['TotalClaims']
+        feat_df = feat_df.reset_index()
+        feat_df['outpatient_ratio'] = 1.0 - feat_df['inpatient_ratio']
+        feat_df['reimbursement_to_deductible_ratio'] = feat_df['total_claim_amount'] / (feat_df['total_deductible_paid'] + 1.0)
+        feat_df['physician_to_claim_ratio'] = feat_df['unique_attending_physicians'] / feat_df['total_claims']
 
-        # Extract Unique Diagnosis & Procedure Codes across all slots per provider
+        # Code diversity across all 10 diagnosis slots and 6 procedure slots
         diag_cols = [c for c in df_claims.columns if c.startswith('ClmDiagnosisCode_')]
         proc_cols = [c for c in df_claims.columns if c.startswith('ClmProcedureCode_')]
 
@@ -121,19 +165,46 @@ class ProviderFeatureExtractor:
         unique_diag_series = prov_grp.apply(lambda g: count_unique_codes(g, diag_cols), include_groups=False)
         unique_proc_series = prov_grp.apply(lambda g: count_unique_codes(g, proc_cols), include_groups=False)
 
-        feat_df['TotalUniqueDiagnosisCodes'] = unique_diag_series
-        feat_df['TotalUniqueProcedureCodes'] = unique_proc_series
+        feat_df['unique_diagnosis_count'] = feat_df['Provider'].map(unique_diag_series)
+        feat_df['unique_procedure_count'] = feat_df['Provider'].map(unique_proc_series)
 
-        # Fill any remaining NaNs in standard deviations or stay metrics with 0.0
-        feat_df = feat_df.fillna(0.0).reset_index()
+        # Merge Beneficiary concentration and temporal features
+        bene_conc_df = self.compute_beneficiary_repeat_and_concentration(df_claims)
+        temp_freq_df = self.compute_temporal_frequencies(df_claims)
 
-        logging.info(f"[{group.upper()}] Extracted {feat_df.shape[1]} features for {feat_df.shape[0]:,} unique Providers.")
+        feat_df = feat_df.merge(bene_conc_df, on='Provider', how='left')
+        feat_df = feat_df.merge(temp_freq_df, on='Provider', how='left')
+        feat_df = feat_df.merge(prov_state, on='Provider', how='left')
+
+        # Peer Group Benchmarking (State Level Peer Benchmarks)
+        logging.info(f"[{group.upper()}] Computing State-level peer group benchmarks...")
+        state_peer_avg = feat_df.groupby('primary_state').agg(
+            state_peer_avg_claim=('average_claim_amount', 'mean'),
+            state_peer_total_claim=('total_claim_amount', 'mean'),
+            state_peer_claims=('total_claims', 'mean'),
+            state_peer_std_claims=('total_claims', 'std')
+        ).reset_index()
+
+        feat_df = feat_df.merge(state_peer_avg, on='primary_state', how='left')
+
+        feat_df['average_claim_vs_peer_average'] = feat_df['average_claim_amount'] / (feat_df['state_peer_avg_claim'] + 1e-5)
+        feat_df['claim_amount_vs_peer_average'] = feat_df['total_claim_amount'] / (feat_df['state_peer_total_claim'] + 1e-5)
+        feat_df['peer_claim_volume_zscore'] = (
+            (feat_df['total_claims'] - feat_df['state_peer_claims']) / (feat_df['state_peer_std_claims'].fillna(1.0) + 1e-5)
+        )
+
+        # Drop temporary state peer columns used in calculation
+        feat_df = feat_df.drop(columns=['state_peer_avg_claim', 'state_peer_total_claim', 'state_peer_claims', 'state_peer_std_claims'])
+
+        # Fill remaining NaNs with 0.0
+        feat_df = feat_df.fillna(0.0)
+
+        logging.info(f"[{group.upper()}] Extracted {feat_df.shape[1]} provider features for {feat_df.shape[0]:,} unique Providers.")
 
         # Target Labeling for TRAIN dataset ONLY
         if group == "train":
             prov_target_path = glob.glob(os.path.join(self.raw_train_dir, "Train-*.csv"))[0]
             df_target = pd.read_csv(prov_target_path)
-            # Map PotentialFraud: 'Yes' -> 1, 'No' -> 0
             df_target['PotentialFraud'] = df_target['PotentialFraud'].map({'Yes': 1, 'No': 0})
             
             feat_df = feat_df.merge(df_target[['Provider', 'PotentialFraud']], on='Provider', how='left')
@@ -152,4 +223,4 @@ if __name__ == "__main__":
     extractor = ProviderFeatureExtractor()
     df_train_feats = extractor.extract_provider_features(group="train")
     df_test_feats = extractor.extract_provider_features(group="test")
-    print("--> Provider Feature Engineering completed successfully!")
+    print("--> Advanced Provider Feature Engineering completed successfully!")
