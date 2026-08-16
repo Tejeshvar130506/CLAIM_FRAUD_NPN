@@ -85,6 +85,7 @@ def get_audit_logs(
     role: Optional[str] = None,
     action: Optional[str] = None,
     entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
     status: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
@@ -108,6 +109,9 @@ def get_audit_logs(
     if entity_type:
         query += " AND entity_type = ?"
         params.append(entity_type.upper().strip())
+    if entity_id:
+        query += " AND entity_id = ?"
+        params.append(str(entity_id).strip())
     if status:
         query += " AND status = ?"
         params.append(status.upper().strip())
