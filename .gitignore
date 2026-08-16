@@ -54,6 +54,12 @@ data/sample/*
 models/*
 !models/.gitkeep
 
+# Database
+*.db-wal
+*.db-shm
+data/db/*.db
+!data/db/.gitkeep
+
 # Pytest / Coverage
 .pytest_cache/
 .coverage

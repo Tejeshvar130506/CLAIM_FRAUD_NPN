@@ -79,6 +79,6 @@ This report documents the automated data discovery and structural profiling cond
 2. **Provider-Level Feature Aggregation**:
    - Aggregate Inpatient and Outpatient claim metrics (claim counts, mean reimbursement, length of stay, unique beneficiary counts, physician involvement ratios) at the `Provider` level.
 3. **Data Dictionary**:
-   - Detailed column metadata saved to [`reports/data_dictionary.csv`](file:///C:/Users/tejes/OneDrive/Desktop/Fraud claim/reports/data_dictionary.csv).
+   - Detailed column metadata saved to [`reports/data_dictionary.csv`](file:///C:/Users/tejes/OneDrive/CTS NPN 1/reports/data_dictionary.csv).
 4. **Relational Analysis**:
-   - Detailed join and entity analysis saved to [`reports/dataset_relationships.md`](file:///C:/Users/tejes/OneDrive/Desktop/Fraud claim/reports/dataset_relationships.md).
+   - Detailed join and entity analysis saved to [`reports/dataset_relationships.md`](file:///C:/Users/tejes/OneDrive/CTS NPN 1/reports/dataset_relationships.md).
