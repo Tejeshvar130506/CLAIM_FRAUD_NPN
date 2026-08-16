@@ -34,11 +34,14 @@ class InvestigationService:
         status: Optional[str] = None,
         priority: Optional[str] = None,
         assigned_to: Optional[str] = None,
+        search_query: Optional[str] = None,
+        order_by: str = "NEWEST",
         limit: int = 100,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
         """
         Fetches filtered investigation cases with provider metrics joined.
+        Supports ordering by NEWEST, OLDEST, or RISK_SCORE.
         """
         query = """
             SELECT 
@@ -63,8 +66,17 @@ class InvestigationService:
         if assigned_to:
             query += " AND i.assigned_to = ?"
             params.append(assigned_to.strip().lower())
+        if search_query:
+            query += " AND (i.provider_id LIKE ? OR i.case_number LIKE ?)"
+            params.extend([f"%{search_query.strip().upper()}%", f"%{search_query.strip().upper()}%"])
 
-        query += " ORDER BY i.ai_risk_score DESC, i.id DESC LIMIT ? OFFSET ?"
+        order_clause = " ORDER BY i.id DESC"
+        if order_by == "OLDEST":
+            order_clause = " ORDER BY i.id ASC"
+        elif order_by == "RISK_SCORE":
+            order_clause = " ORDER BY i.ai_risk_score DESC, i.id DESC"
+
+        query += order_clause + " LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
         with db_transaction(self.db_path) as conn:
