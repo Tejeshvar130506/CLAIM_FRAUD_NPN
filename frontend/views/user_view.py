@@ -2,9 +2,9 @@
 User Claims Ingestion, AI Risk Scoring & Investigator Dispatch View
 -------------------------------------------------------------------
 A clean, intuitive, non-technical guided workflow:
-1. Document Upload & Automated Data Processing
+1. Document Upload & Automated Data Processing (File upload only)
 2. AI Fraud Detection & Risk Scoring
-3. SHAP & LIME Visual Explainability (Made simple for non-technical users)
+3. Global SHAP Waterfall & LIME Explainability for Entire Dataset
 4. One-Click Dispatch to SIU Investigators Queue
 5. Sent Cases Tracking & History
 """
@@ -38,7 +38,7 @@ def render_user_view(username: str, role: str, db_path: str = DATABASE_PATH) -> 
         <div style="background: linear-gradient(135deg, #1e293b 0%, #0f766e 100%); padding: 1.5rem 2rem; border-radius: 12px; color: white; margin-bottom: 1.5rem;">
             <h2 style="margin: 0; color: #f8fafc;">📁 Claims Data Processing & Fraud Risk Intelligence</h2>
             <p style="margin: 0.35rem 0 0 0; color: #cbd5e1; font-size: 0.95rem;">
-                Upload claims files, execute automated AI fraud risk scoring (XGBoost + SHAP/LIME), and transmit prioritized risk cases directly to the Special Investigations Unit (SIU).
+                Upload claims files, execute automated AI fraud risk scoring, inspect dataset-wide SHAP waterfall & LIME explanations, and transmit prioritized risk cases directly to the Special Investigations Unit (SIU).
             </p>
         </div>
         """,
@@ -94,7 +94,7 @@ def render_user_view(username: str, role: str, db_path: str = DATABASE_PATH) -> 
     # Navigation Tabs
     tab_pipeline, tab_explain, tab_dispatch, tab_tracker = st.tabs([
         "1️⃣ Document Upload & Risk Scoring",
-        "2️⃣ SHAP & LIME Risk Explanations",
+        "2️⃣ Dataset SHAP & LIME Risk Explanations",
         "3️⃣ Send Risk Cases to Investigators",
         "4️⃣ Transmitted Cases Tracker"
     ])
@@ -103,41 +103,33 @@ def render_user_view(username: str, role: str, db_path: str = DATABASE_PATH) -> 
     # TAB 1: Document Upload & Automated Risk Scoring
     # ==========================================================================
     with tab_pipeline:
-        st.markdown("### 📤 Step 1: Document Upload & Automated Processing")
-        st.caption("Upload raw Medicare claims documents (CSV format) or run pre-loaded claim batches.")
+        st.markdown("### 📤 Step 1: Upload Claims Documents")
+        st.caption("Upload raw Medicare claims CSV files (Inpatient, Outpatient, Beneficiary) for automated schema validation and AI fraud risk scoring.")
 
-        ucol1, ucol2 = st.columns([1.5, 1])
+        uploaded_files = st.file_uploader(
+            "Select Claims CSV Files to Upload:",
+            type=["csv"],
+            accept_multiple_files=True,
+            key="user_doc_uploader"
+        )
 
-        with ucol1:
-            uploaded_files = st.file_uploader(
-                "Upload Claims Files (Inpatient, Outpatient, Beneficiary)",
-                type=["csv"],
-                accept_multiple_files=True,
-                key="user_doc_uploader"
-            )
+        if uploaded_files:
+            st.success(f"Selected {len(uploaded_files)} file(s): " + ", ".join([f.name for f in uploaded_files]))
 
-        with ucol2:
-            st.markdown("##### 📦 Or Select Demo Claims Dataset:")
-            demo_dataset = st.selectbox(
-                "Pre-loaded Batch Options",
-                ["Medicare Statewide Claims Batch A (5,410 Providers)", "Medicare Outpatient Claims Batch B (1,353 Providers)"],
-                index=0
-            )
-
-        # Trigger Processing
+        # Trigger Processing Button
         if st.button("⚡ Run Automated Data Processing & Risk Scoring", type="primary", use_container_width=True):
-            with st.spinner("Processing documents, validating key integrity, and running AI models..."):
+            with st.spinner("Validating document schemas, profiling keys, and executing AI models..."):
                 if uploaded_files:
                     dfs_dict = {f.name: pd.read_csv(f) for f in uploaded_files}
                     perc_res = perception_agent.analyze_uploaded_dataframes(dfs_dict, actor_username=username)
                     st.session_state["user_quality_score"] = perc_res.quality_report.overall_quality_score
                     st.session_state["user_total_claims_processed"] = perc_res.quality_report.total_records
-                st.success("✅ Claims processing and automated risk scoring complete!")
+                st.success("✅ Document validation and automated risk scoring completed successfully!")
 
         st.markdown("---")
 
         # Processing & Scoring Summary KPIs
-        st.markdown("### 📊 Processing & AI Risk Scoring Summary")
+        st.markdown("### 📊 Dataset Processing & AI Risk Scoring Summary")
 
         if df_feats is not None:
             total_providers = len(df_feats)
@@ -154,7 +146,7 @@ def render_user_view(username: str, role: str, db_path: str = DATABASE_PATH) -> 
             with kcol1:
                 st.metric("Total Providers Analyzed", f"{total_providers:,}")
             with kcol2:
-                st.metric("Total Claims Processed", f"{total_claims:,}")
+                st.metric("Total Claims Ingested", f"{total_claims:,}")
             with kcol3:
                 st.metric("🔴 High / Critical Risk", f"{len(high_risk_df):,} ({len(high_risk_df)/total_providers*100:.1f}%)")
             with kcol4:
@@ -194,81 +186,80 @@ def render_user_view(username: str, role: str, db_path: str = DATABASE_PATH) -> 
             )
 
     # ==========================================================================
-    # TAB 2: SHAP & LIME Visual Explainability (Simplified for Non-Technical Users)
+    # TAB 2: Dataset-Wide SHAP & LIME Explainability (Waterfall Plot)
     # ==========================================================================
     with tab_explain:
-        st.markdown("### 🔍 Step 2: SHAP & LIME AI Risk Explainability")
-        st.caption("Understand why a provider was flagged without complex technical jargon.")
+        st.markdown("### 🔍 Step 2: Global AI Explainability (SHAP & LIME for Entire Dataset)")
+        st.caption("Understand how different billing and clinical patterns drive overall fraud risk across the entire population.")
 
         if df_feats is not None:
-            high_list = list(df_feats[df_feats["risk_score"] >= 60]["Provider"].head(30))
-            if not high_list:
-                high_list = list(df_feats["Provider"].head(30))
-
-            selected_prov = st.selectbox(
-                "Select a Flagged Provider to Inspect AI Explanations:",
-                high_list,
-                key="shap_lime_prov_selector"
+            # 1. SHAP Waterfall Chart
+            st.markdown("#### 🌊 Global SHAP Waterfall Plot (Cumulative Population Risk Impact)")
+            st.info(
+                "💡 **How to read the Waterfall Plot:**\n\n"
+                "- 🔴 **Red bars** represent billing practices that **increase** the estimated fraud risk score across the population.\n"
+                "- 🟢 **Green bars** represent stabilizing practice patterns that **lower** risk.\n"
+                "- 🔵 **Blue total bar** represents the aggregate net risk score shift across the dataset."
             )
 
-            prov_row = df_feats[df_feats["Provider"] == selected_prov].iloc[[0]]
-            score = int(prov_row["risk_score"].values[0]) if "risk_score" in prov_row else 75
-            prob = float(prov_row["fraud_probability"].values[0]) if "fraud_probability" in prov_row else 0.75
-            lvl = str(prov_row["risk_level"].values[0]) if "risk_level" in prov_row else "HIGH"
+            shap_items = explain_service.compute_global_shap_waterfall(df_feats, top_k=7)
 
-            # Top Badge Summary
-            scol1, scol2, scol3 = st.columns(3)
-            with scol1:
-                st.metric("Provider ID", selected_prov)
-            with scol2:
-                st.metric("Risk Score", f"{score} / 100")
-            with scol3:
-                st.metric("Model Probability", f"{prob*100:.1f}% ({lvl})")
+            if shap_items:
+                f_names = [item["display_name"] for item in shap_items]
+                f_values = [item["mean_shap"] for item in shap_items]
+
+                fig_waterfall = go.Figure(go.Waterfall(
+                    name="Global Risk Driver Attribution",
+                    orientation="v",
+                    measure=["relative"] * len(f_names) + ["total"],
+                    x=f_names + ["Aggregate Risk Shift"],
+                    textposition="outside",
+                    text=[f"{v:+.3f}" for v in f_values] + [f"{sum(f_values):+.3f}"],
+                    y=f_values + [sum(f_values)],
+                    connector={"line": {"color": "rgb(100, 116, 139)"}},
+                    increasing={"marker": {"color": "#dc2626"}},  # Red for risk increase
+                    decreasing={"marker": {"color": "#16a34a"}},  # Green for risk decrease
+                    totals={"marker": {"color": "#0284c7"}}       # Blue for total
+                ))
+
+                fig_waterfall.update_layout(
+                    title="Global SHAP Waterfall: Cumulative Feature Contributions to Model Risk Output",
+                    height=450,
+                    margin=dict(l=20, r=20, t=50, b=40),
+                    xaxis_tickangle=-25
+                )
+
+                st.plotly_chart(fig_waterfall, use_container_width=True)
 
             st.markdown("---")
 
-            x_col1, x_col2 = st.columns(2)
+            # 2. Global LIME Practice Drivers
+            st.markdown("#### 🧪 Global LIME Practice Drivers (Population Benchmark vs High-Risk Deviations)")
+            st.caption("Comparison of average billing behaviors between standard providers and flagged high-risk providers:")
 
-            # SHAP Visualization
-            with x_col1:
-                st.markdown("#### 📊 SHAP Feature Impact Analysis")
-                st.caption("Shows what factors pushed this provider's risk higher (Red) or lower (Green):")
-                
-                shap_items = explain_service.compute_shap_contributions(prov_row, top_k=7)
-                if shap_items:
-                    df_shap = pd.DataFrame(shap_items)
-                    fig_shap = px.bar(
-                        df_shap,
-                        x="shap_value",
-                        y="display_name",
-                        orientation="h",
-                        color="direction",
-                        color_discrete_map={"INCREASES_RISK": "#dc2626", "DECREASES_RISK": "#16a34a", "NEUTRAL": "#94a3b8"},
-                        title="SHAP Feature Attributions (Risk Drivers)"
-                    )
-                    fig_shap.update_layout(yaxis=dict(autorange="reversed"), height=320, margin=dict(l=20, r=20, t=40, b=20))
-                    st.plotly_chart(fig_shap, use_container_width=True)
+            lime_items = explain_service.compute_global_lime_summary(df_feats, top_k=5)
 
-            # LIME Local Explanations
-            with x_col2:
-                st.markdown("#### 🧪 LIME Local Practice Explanations")
-                st.caption("Plain-English breakdown of key practice deviations:")
-                
-                lime_items = explain_service.compute_lime_contributions(prov_row, top_k=5)
-                for item in lime_items:
-                    if item["direction"] == "INCREASES_RISK":
-                        st.error(f"🔴 **{item['display_name']}** (Value: {item['actual_value']})\n\n{item['plain_summary']}")
-                    elif item["direction"] == "DECREASES_RISK":
-                        st.success(f"🟢 **{item['display_name']}** (Value: {item['actual_value']})\n\n{item['plain_summary']}")
-                    else:
-                        st.info(f"⚪ **{item['display_name']}**\n\n{item['plain_summary']}")
+            for item in lime_items:
+                sev_icon = "🔴" if item["impact_level"] == "CRITICAL" else ("🟠" if item["impact_level"] == "HIGH" else "🟡")
+                with st.container():
+                    st.markdown(f"##### {sev_icon} {item['display_name']} ({item['impact_level']} Impact)")
+                    lcol1, lcol2 = st.columns([1, 2])
+                    with lcol1:
+                        st.metric(
+                            label="High-Risk Group Average",
+                            value=f"{item['high_risk_avg']:.1f}",
+                            delta=f"+{item['high_risk_avg'] - item['population_avg']:.1f} vs general pop"
+                        )
+                    with lcol2:
+                        st.write(f"📌 **Key Insight**: {item['plain_insight']}")
+                    st.markdown("<hr style='margin: 0.5rem 0 1rem 0; border: 0.5px solid #e2e8f0;'>", unsafe_allow_html=True)
 
     # ==========================================================================
     # TAB 3: Send Risk Cases to Investigators Queue
     # ==========================================================================
     with tab_dispatch:
         st.markdown("### 🚀 Step 3: Transmit Prioritized Risk Data to SIU Investigators")
-        st.caption("Package flagged providers with complete AI risk scores, SHAP/LIME evidence, and send to the Special Investigations Unit.")
+        st.caption("Package flagged providers with complete AI risk scores, SHAP waterfall & LIME evidence, and transmit directly to the Special Investigations Unit.")
 
         if df_feats is not None:
             high_candidates = df_feats[df_feats["risk_score"] >= 60].copy()
@@ -395,7 +386,7 @@ def render_user_view(username: str, role: str, db_path: str = DATABASE_PATH) -> 
 
                 st.success(
                     f"🎉 **Success! Transmitted {sent_count} risk cases to the SIU Investigators Queue.**\n\n"
-                    f"Investigators can now view these cases in their active work queue, review SHAP/LIME explainability, and record clinical findings."
+                    f"Investigators can now view these cases in their active work queue, review SHAP waterfall & LIME explainability, and record clinical findings."
                 )
 
     # ==========================================================================
