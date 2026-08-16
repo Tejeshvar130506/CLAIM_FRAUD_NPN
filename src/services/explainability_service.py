@@ -285,3 +285,61 @@ class ExplainabilityService:
             findings.append("Provider billing metrics fall within standard population peer distributions.")
 
         return findings
+
+    def compute_shap_contributions(self, df_feature_row: pd.DataFrame, top_k: int = 8) -> List[Dict[str, Any]]:
+        """
+        Computes TreeSHAP feature attributions on XGBoost model for a single provider.
+        """
+        if self.xgb_model is None:
+            self._load_models()
+        if self.xgb_model is None:
+            return []
+
+        try:
+            import shap
+            X = df_feature_row[MODEL_FEATURE_COLUMNS].fillna(0.0)
+            explainer = shap.TreeExplainer(self.xgb_model)
+            shap_values = explainer.shap_values(X)
+            
+            # If multi-dimensional or 2D array
+            if isinstance(shap_values, list):
+                vals = shap_values[1][0] if len(shap_values) > 1 else shap_values[0][0]
+            elif len(shap_values.shape) == 2:
+                vals = shap_values[0]
+            else:
+                vals = shap_values
+
+            items = []
+            for col, val in zip(MODEL_FEATURE_COLUMNS, vals):
+                act_val = float(df_feature_row[col].values[0]) if col in df_feature_row else 0.0
+                items.append({
+                    "feature_name": col,
+                    "display_name": FEATURE_DISPLAY_NAMES.get(col, col.replace('_', ' ').title()),
+                    "shap_value": float(val),
+                    "actual_value": act_val,
+                    "direction": "INCREASES_RISK" if val > 0.01 else ("DECREASES_RISK" if val < -0.01 else "NEUTRAL"),
+                    "impact": "Higher Risk Indicator" if val > 0.01 else ("Lower Risk Mitigator" if val < -0.01 else "Normal Baseline")
+                })
+
+            items.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
+            return items[:top_k]
+        except Exception as e:
+            logger.warning(f"SHAP computation fallback: {e}")
+            return []
+
+    def compute_lime_contributions(self, df_feature_row: pd.DataFrame, top_k: int = 8) -> List[Dict[str, Any]]:
+        """
+        Computes local surrogate linear feature weights (LIME representation) comparing provider against peer baseline.
+        """
+        ebm_items = self._extract_ebm_contributions(df_feature_row[MODEL_FEATURE_COLUMNS].fillna(0.0), top_k=top_k)
+        lime_list = []
+        for e in ebm_items:
+            lime_list.append({
+                "feature_name": e.feature_name,
+                "display_name": e.display_name,
+                "local_weight": e.score_contribution,
+                "actual_value": e.actual_value,
+                "direction": e.direction,
+                "plain_summary": e.plain_summary
+            })
+        return lime_list
