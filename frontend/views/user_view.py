@@ -45,23 +45,51 @@ def render_user_view(username: str, role: str, db_path: str = DATABASE_PATH) -> 
         unsafe_allow_html=True
     )
 
-    # Initialize User Session State
-    if "user_df_features" not in st.session_state:
-        st.session_state["user_df_features"] = None
-    if "user_quality_score" not in st.session_state:
-        st.session_state["user_quality_score"] = None
-    if "user_total_claims_processed" not in st.session_state:
-        st.session_state["user_total_claims_processed"] = None
-
-    # Load baseline precomputed features if not yet loaded
-    if st.session_state["user_df_features"] is None:
+    # Initialize & Load User Session State with DB Risk Scores
+    if "user_df_features" not in st.session_state or st.session_state["user_df_features"] is None or "risk_score" not in st.session_state["user_df_features"].columns:
         train_feat_path = os.path.join(FEATURES_DATA_DIR, "train_provider_features.parquet")
         if os.path.exists(train_feat_path):
-            st.session_state["user_df_features"] = pd.read_parquet(train_feat_path)
+            df_raw = pd.read_parquet(train_feat_path)
+            try:
+                with db_transaction(db_path) as conn:
+                    df_prov_db = pd.read_sql_query(
+                        "SELECT provider_id as Provider, risk_score, risk_level, investigation_priority, fraud_probability FROM providers",
+                        conn
+                    )
+                if not df_prov_db.empty:
+                    df_merged = pd.merge(df_raw, df_prov_db, on="Provider", how="left")
+                else:
+                    df_merged = df_raw.copy()
+            except Exception:
+                df_merged = df_raw.copy()
+
+            if "risk_score" not in df_merged.columns:
+                df_merged["risk_score"] = 15
+            else:
+                df_merged["risk_score"] = df_merged["risk_score"].fillna(15).astype(int)
+
+            if "risk_level" not in df_merged.columns:
+                df_merged["risk_level"] = "LOW"
+            else:
+                df_merged["risk_level"] = df_merged["risk_level"].fillna("LOW")
+
+            if "investigation_priority" not in df_merged.columns:
+                df_merged["investigation_priority"] = "LOW"
+            else:
+                df_merged["investigation_priority"] = df_merged["investigation_priority"].fillna("LOW")
+
+            if "fraud_probability" not in df_merged.columns:
+                df_merged["fraud_probability"] = 0.15
+            else:
+                df_merged["fraud_probability"] = df_merged["fraud_probability"].fillna(0.15)
+
+            st.session_state["user_df_features"] = df_merged
             st.session_state["user_quality_score"] = 98.5
             st.session_state["user_total_claims_processed"] = 558211
+        else:
+            st.session_state["user_df_features"] = None
 
-    df_feats = st.session_state["user_df_features"]
+    df_feats = st.session_state.get("user_df_features")
 
     # Navigation Tabs
     tab_pipeline, tab_explain, tab_dispatch, tab_tracker = st.tabs([
